@@ -1,0 +1,40 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Get Energy",
+        "description": "Sign in with your Get Energy MyAccount credentials.",
+        "data": {
+          "username": "Username (email)",
+          "password": "Password"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Get Energy",
+        "description": "Your session was rejected by the portal. Enter your password again.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid credentials. Check them carefully before retrying: the portal locks accounts after repeated failed logins.",
+      "cannot_connect": "Could not reach the Get Energy portal."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Re-authentication was successful."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "amount_due": { "name": "Amount due" },
+      "previous_balance": { "name": "Previous balance" },
+      "payments": { "name": "Payments received" },
+      "current_charges": { "name": "Current charges" },
+      "electricity_imported": { "name": "Electricity imported" },
+      "electricity_exported": { "name": "Electricity exported" },
+      "gas_consumption": { "name": "Gas consumption" }
+    }
+  }
+}

@@ -86,3 +86,56 @@ def test_solve_reports_singular_systems():
 
 def test_r_squared_is_one_for_a_perfect_fit():
     assert r_squared([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == 1.0
+
+
+# -- predictor selection -----------------------------------------------------
+
+RATE = 0.35
+
+
+def _solar_statements() -> list[dict]:
+    """Import and export deliberately uncorrelated, as they are in reality:
+    the sunniest months import least and export most."""
+    pairs = [(560, 284, 30), (696, 999, 31), (609, 701, 29), (662, 926, 32),
+             (1036, 634, 28), (903, 375, 31), (1084, 254, 30), (1597, 109, 29)]
+    return [
+        {
+            "electricity_imported_kwh": kin,
+            "electricity_exported_kwh": kout,
+            "service_days": days,
+            "microgen_credit": -RATE * kout,
+            "admin_charge": 9.97,
+        }
+        for kin, kout, days in pairs
+    ]
+
+
+def test_export_credit_is_fitted_against_exported_kwh():
+    """The microgen credit is paid on exports, not imports.
+
+    Regressing it against imported kWh is simply the wrong predictor and
+    yields a slope with the wrong sign and magnitude.
+    """
+    right = fit(_solar_statements(), "microgen_credit", "electricity_exported_kwh")
+
+    assert abs(right["per_kwh"] - -RATE) < 1e-6
+    assert right["r2"] > 0.999
+
+
+def test_wrong_predictor_is_visibly_wrong():
+    wrong = fit(_solar_statements(), "microgen_credit", "electricity_imported_kwh")
+
+    assert wrong["r2"] < 0.9
+    assert abs(wrong["per_kwh"] - -RATE) > 0.1
+
+
+def test_constant_charge_is_flagged_rather_than_looking_unreliable():
+    """A fixed fee has no variance to explain, so its r2 is meaningless.
+
+    Without the flag a perfectly well-understood standing charge reads as a
+    failed fit and gets wrongly discarded.
+    """
+    result = fit(_solar_statements(), "admin_charge")
+
+    assert result["nearly_constant"] is True
+    assert abs(result["fixed"] - 9.97) < 0.01

@@ -4,23 +4,22 @@
 Home Assistant's energy dashboard computes ``cost = sum(delta_kWh * price)``.
 That is a pure multiplication, so it has no way to express a standing charge.
 But an Alberta electricity bill is not linear in kWh: the admin charge and part
-of the distribution charge are fixed per month, which is why your average cost
-per kWh falls the more you import.
+of the distribution charge are fixed per month, which is why average cost per
+kWh falls the more you import.
 
 The bill prints Transmission and Distribution as single totals and never
-publishes the fixed/variable split. This tool recovers it empirically by
-regressing each charge component against kWh and days across your statement
-history:
+publishes the fixed/variable split. This tool recovers it by regressing each
+component across your statement history:
 
     charge ~= fixed + per_kwh * kWh + per_day * days
 
-The per_kwh slopes are what a marginal price entity should use; the fixed and
-per_day intercepts are what has to be tracked separately.
+Not every component is regressed against the same thing, and two are not
+regressed at all -- see COMPONENTS below for why.
 
     GETENERGY_USERNAME=... GETENERGY_PASSWORD=... python tools/history.py
 
-Writes history.json (one record per statement) and prints the fit. Downloads
-are rate-limited and skipped if already on disk, so re-running is cheap.
+Writes history.json and prints the fit. Downloads are cached and rate-limited,
+so re-running is cheap.
 """
 
 from __future__ import annotations
@@ -31,6 +30,7 @@ import os
 import sys
 import time
 import types
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -43,25 +43,46 @@ if "getenergy" not in sys.modules:
 from getenergy.api import DocumentUnavailable, GetEnergyClient  # noqa: E402
 from getenergy.bill import parse  # noqa: E402
 
-COMPONENTS = [
-    "energy_charge",
-    "green_offset_charge",
-    "microgen_credit",
-    "transmission_charge",
-    "transmission_riders",
-    "distribution_charge",
-    "distribution_riders",
-    "balancing_pool",
-    "franchise_fee",
-    "admin_charge",
-    "transmission_and_distribution",
-]
+IMPORTED = "electricity_imported_kwh"
+EXPORTED = "electricity_exported_kwh"
+
+
+@dataclass(frozen=True)
+class Component:
+    key: str
+    #: Which volume drives this charge. Regressing the microgen credit against
+    #: imported kWh is simply the wrong predictor -- it is paid on exports.
+    predictor: str = IMPORTED
+    #: Charges that are rate x volume are not regressed. The energy rate has
+    #: moved several-fold across the history, so a fit against kWh alone is
+    #: misspecified and returns a meaningless (even negative) slope.
+    rate_driven: bool = False
+    #: Whether the per-kWh slope belongs in the marginal *import* price.
+    marginal_import: bool = True
+
+
+COMPONENTS: tuple[Component, ...] = (
+    Component("energy_charge", rate_driven=True),
+    Component("green_offset_charge"),
+    Component("microgen_credit", predictor=EXPORTED, rate_driven=True,
+              marginal_import=False),
+    Component("transmission_charge"),
+    Component("transmission_riders"),
+    Component("distribution_charge"),
+    Component("distribution_riders"),
+    Component("balancing_pool"),
+    Component("franchise_fee"),
+    Component("admin_charge"),
+    # Reported for cross-checking only; it is the sum of its parts, so adding
+    # its slope to theirs would double-count.
+    Component("transmission_and_distribution", marginal_import=False),
+)
 
 
 def solve(matrix: list[list[float]], rhs: list[float]) -> list[float] | None:
     """Least squares via normal equations and Gaussian elimination.
 
-    Deliberately dependency-free -- this runs from a checkout, not inside Home
+    Dependency-free on purpose: this runs from a checkout, not inside Home
     Assistant, and pulling in numpy for a 3x3 solve is not worth it.
     """
     n = len(matrix[0])
@@ -94,16 +115,14 @@ def r_squared(actual: list[float], predicted: list[float]) -> float:
     return 1.0 - ss_res / ss_tot if ss_tot else float("nan")
 
 
-def fit(records: list[dict], key: str) -> dict | None:
-    """Fit ``charge ~ fixed + per_kwh*kWh + per_day*days`` for one component."""
+def fit(records: list[dict], key: str, predictor: str = IMPORTED) -> dict | None:
+    """Fit ``charge ~ fixed + per_unit*volume + per_day*days``."""
     rows, ys = [], []
     for rec in records:
-        kwh = rec.get("electricity_imported_kwh")
-        days = rec.get("service_days")
-        value = rec.get(key)
-        if kwh is None or days is None or value is None:
+        volume, days, value = rec.get(predictor), rec.get("service_days"), rec.get(key)
+        if volume is None or days is None or value is None:
             continue
-        rows.append([1.0, float(kwh), float(days)])
+        rows.append([1.0, float(volume), float(days)])
         ys.append(float(value))
 
     if len(rows) < 4:
@@ -113,12 +132,17 @@ def fit(records: list[dict], key: str) -> dict | None:
         return None
 
     predicted = [sum(c * x for c, x in zip(coeffs, row)) for row in rows]
+    spread = max(ys) - min(ys)
     return {
         "n": len(rows),
         "fixed": coeffs[0],
         "per_kwh": coeffs[1],
         "per_day": coeffs[2],
         "r2": r_squared(ys, predicted),
+        # A charge that barely moves has almost no variance to explain, so its
+        # r2 is low however good the fit. Flagging it stops a fixed fee being
+        # dismissed as unreliable when "does not depend on kWh" is the answer.
+        "nearly_constant": spread < 0.05 * (abs(sum(ys) / len(ys)) or 1.0),
     }
 
 
@@ -135,21 +159,24 @@ def download(months: int, outdir: Path, delay: float) -> list[dict]:
     today = date.today()
     year, month = today.year, today.month
 
+    def step():
+        nonlocal year, month
+        month -= 1
+        if month == 0:
+            year, month = year - 1, 12
+
     for _ in range(months):
         period = f"{year:04d}{month:02d}"
         pdf_path = outdir / f"consolidated-{period}.pdf"
 
         if pdf_path.exists():
-            pdf = pdf_path.read_bytes()
-            note = "cached"
+            pdf, note = pdf_path.read_bytes(), "cached"
         else:
             try:
                 pdf = client.consolidated(period)
             except DocumentUnavailable:
-                print(f"  {period}  -")
-                month -= 1
-                if month == 0:
-                    year, month = year - 1, 12
+                print(f"  {period}  {'-':>8}")
+                step()
                 continue
             pdf_path.write_bytes(pdf)
             note = f"{len(pdf)}B"
@@ -157,55 +184,98 @@ def download(months: int, outdir: Path, delay: float) -> list[dict]:
             time.sleep(delay)
 
         statement = parse(pdf, period)
-        record = statement.as_dict()
-        records.append(record)
-        print(
-            f"  {period}  {note:>8}  "
-            f"{record.get('electricity_imported_kwh', '?')} kWh in, "
-            f"{record.get('electricity_exported_kwh', '?')} kWh out, "
-            f"${record.get('amount_due', '?')}"
-        )
+        if not statement.values:
+            # Periods before the account existed come back as a stub PDF
+            # rather than a 404, so an empty parse means "no statement", not
+            # "the layout changed".
+            print(f"  {period}  {note:>8}  no statement (before account start?)")
+            step()
+            continue
 
-        month -= 1
-        if month == 0:
-            year, month = year - 1, 12
+        records.append(statement.as_dict())
+        rec = records[-1]
+        print(
+            f"  {period}  {note:>8}  {rec.get(IMPORTED, '?')} kWh in, "
+            f"{rec.get(EXPORTED, '?')} kWh out, ${rec.get('amount_due', '?')}"
+        )
+        step()
 
     return records
 
 
 def report(records: list[dict]) -> None:
     print(f"\n{len(records)} statements parsed\n")
-    print("=" * 74)
-    print("Cost structure   charge ~ fixed + per_kwh*kWh + per_day*days")
-    print("=" * 74)
-    print(f"{'component':<32}{'fixed':>9}{'$/kWh':>10}{'$/day':>9}{'r2':>8}{'n':>5}")
-    print("-" * 74)
+    print("=" * 78)
+    print("Cost structure   charge ~ fixed + per_unit*volume + per_day*days")
+    print("=" * 78)
+    print(f"{'component':<32}{'on':>4}{'fixed':>9}{'$/unit':>10}{'$/day':>9}{'r2':>8}{'n':>5}")
+    print("-" * 78)
 
-    marginal = 0.0
-    for key in COMPONENTS:
-        result = fit(records, key)
+    fits: dict[str, dict] = {}
+    for comp in COMPONENTS:
+        result = fit(records, comp.key, comp.predictor)
         if result is None:
-            print(f"{key:<32}{'insufficient data':>41}")
+            print(f"{comp.key:<32}{'insufficient data':>46}")
             continue
+        fits[comp.key] = result
+        flag = " ~const" if result["nearly_constant"] else ""
+        tag = "exp" if comp.predictor == EXPORTED else "imp"
         print(
-            f"{key:<32}{result['fixed']:>9.2f}{result['per_kwh']:>10.5f}"
-            f"{result['per_day']:>9.3f}{result['r2']:>8.3f}{result['n']:>5}"
+            f"{comp.key:<32}{tag:>4}{result['fixed']:>9.2f}{result['per_kwh']:>10.5f}"
+            f"{result['per_day']:>9.3f}{result['r2']:>8.3f}{result['n']:>5}{flag}"
         )
-        # T&D is the sum of its parts; counting both would double it.
-        if key != "transmission_and_distribution":
-            marginal += result["per_kwh"]
+    print("-" * 78)
 
-    print("-" * 74)
-    print(f"\nmarginal import cost  ~ ${marginal:.5f} / kWh  (excl. GST)")
-    print("A low r2 means that component is not well explained by kWh and days;")
-    print("treat its split as unreliable rather than rounding it into the rate.")
+    rates = sorted({r["rate_cents_per_kwh"] for r in records
+                    if r.get("rate_cents_per_kwh")})
+    latest = next((r.get("rate_cents_per_kwh") for r in records
+                   if r.get("rate_cents_per_kwh")), None)
 
-    rates = {r.get("rate_cents_per_kwh") for r in records if r.get("rate_cents_per_kwh")}
-    if rates:
-        print(f"\nenergy rates seen: {sorted(rates)} cents/kWh")
-        if len(rates) > 1:
-            print("Rates changed over this window, so a single fit blends regimes.")
-            print("Re-run with --months 12 to restrict it to the recent one.")
+    # Energy and the microgen credit are rate x volume; the rate is printed on
+    # the bill, so it is read rather than inferred.
+    variable = sum(f["per_kwh"] for c, f in fits.items()
+                   if next(x for x in COMPONENTS if x.key == c).marginal_import
+                   and not next(x for x in COMPONENTS if x.key == c).rate_driven)
+    standing_day = sum(f["per_day"] for c, f in fits.items()
+                       if next(x for x in COMPONENTS if x.key == c).marginal_import)
+    standing_fixed = sum(f["fixed"] for c, f in fits.items()
+                         if next(x for x in COMPONENTS if x.key == c).marginal_import
+                         and f["nearly_constant"])
+
+    print("\nPRICES FOR HOME ASSISTANT")
+    print(f"  wires and fees, per imported kWh   ${variable:.5f}")
+    if latest is not None:
+        energy = latest / 100.0
+        print(f"  energy rate (from the bill)        ${energy:.5f}")
+        print(f"  marginal import price              ${energy + variable:.5f}/kWh"
+              f"   (${(energy + variable) * 1.05:.5f} incl GST)")
+        print(f"  export price                       ${energy:.5f}/kWh"
+              "   (microgen is credited at the energy rate)")
+    print(f"\n  standing charges  ${standing_day:.3f}/day + ${standing_fixed:.2f}/month"
+          f"  ~ ${standing_day * 30 + standing_fixed:.2f}/month")
+    print("  These cannot be expressed as a price per kWh; track them separately.")
+
+    if latest is not None:
+        recent = records[0]
+        kwh_in = recent.get(IMPORTED) or 0
+        kwh_out = recent.get(EXPORTED) or 0
+        days = recent.get("service_days") or 30
+        energy = latest / 100.0
+        predicted = ((energy + variable) * kwh_in + standing_day * days
+                     + standing_fixed - energy * kwh_out)
+        actual = recent.get("charges_before_tax")
+        if actual:
+            err = predicted - actual
+            print(f"\n  check against {recent['period']}: predicted ${predicted:.2f}"
+                  f" vs actual ${actual:.2f}  ({err:+.2f}, {abs(err) / actual:.1%})")
+
+    print("\nNOTES")
+    print("  r2 near zero on a row marked ~const is expected and fine: a charge")
+    print("  that barely moves has little variance to explain. Distrust a low r2")
+    print("  only on rows that do vary.")
+    if len(rates) > 1:
+        print(f"  energy rates seen: {rates} cents/kWh -- rate-driven rows are read")
+        print("  from the bill, not fitted, so this does not distort the prices.")
 
 
 def main() -> int:
@@ -224,9 +294,8 @@ def main() -> int:
     if not records:
         raise SystemExit("no statements found")
 
-    out = Path("history.json")
-    out.write_text(json.dumps(records, indent=2), encoding="utf-8")
-    print(f"\nwrote {out}")
+    Path("history.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
+    print("\nwrote history.json")
 
     report(records)
     return 0

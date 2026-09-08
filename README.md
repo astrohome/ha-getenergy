@@ -32,6 +32,10 @@ Or copy `custom_components/getenergy/` into your `config/custom_components/`.
 | Electricity imported | kWh | Usage |
 | Electricity exported | kWh | Microgen Credit lines, summed |
 | Gas consumption | GJ | Usage |
+| Import price | CAD/kWh | derived — energy rate + wires, incl. GST |
+| Export price | CAD/kWh | derived — energy rate only, incl. GST |
+| Energy rate | CAD/kWh | Current Rate |
+| Standing charge | CAD | derived — what price entities cannot express |
 
 Bills are monthly, so the coordinator polls twice a day and the values change
 once a month. A sensor whose label is absent from your statement reports
@@ -157,6 +161,19 @@ GETENERGY_USERNAME=you@example.com GETENERGY_PASSWORD=... \
 It prints the extracted text and which fields matched. Widen the patterns in
 `custom_components/getenergy/bill.py` and please open a PR so others benefit.
 
+## Energy dashboard
+
+Attach **Import price** and **Export price** as "use an entity with current
+price" on your grid consumption and return. They follow the seasonal rate
+automatically — this retailer's Solar Club rate auto-switches between roughly
+6.9 and 35 ¢/kWh, and a statement spanning the switch carries both rates.
+
+Export carries no wires component: exporting incurs no transmission or
+distribution charge, so it is credited at the plain energy rate.
+
+**These prices are marginal, and deliberately do not reconcile to your bill.**
+See below.
+
 ## Cost structure and backfill (in progress)
 
 HA's energy dashboard computes `cost = Σ(Δ kWh × price)` — a pure
@@ -182,10 +199,22 @@ component as `charge ≈ fixed + per_kwh·kWh + per_day·days`. The `per_kwh`
 slopes are what a marginal price entity should use; `fixed` and `per_day` have
 to be tracked separately.
 
-Check the `r2` column before trusting any row — a low value means kWh and days
-do not explain that component, and its split should not be rounded into a rate.
-The fit refuses outright when kWh never varies, rather than inventing a
-plausible-looking split.
+Put the resulting numbers into the integration's options (**Configure** on the
+integration card). The shipped defaults were fitted from one Alberta
+microgeneration account and are a starting point, not a universal truth.
+
+Reading the output:
+
+* `r2` near zero on a row marked `~const` is expected — a charge that barely
+  moves has little variance to explain. Distrust a low `r2` only on rows that
+  do vary.
+* Rate-driven rows (energy, microgen credit) are **not** fitted. The energy
+  rate has moved several-fold, so a fit against kWh is misspecified; the rate
+  is read off the bill instead.
+* The fit refuses outright when kWh never varies, rather than inventing a
+  plausible-looking split.
+* A reconstruction check compares the model against your most recent
+  statement. On the reference account it lands within 1.7%.
 
 ## Development
 

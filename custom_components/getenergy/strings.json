@@ -54,6 +54,32 @@
       },
       "gst": {
         "name": "GST"
+      },
+      "import_price": {
+        "name": "Import price"
+      },
+      "export_price": {
+        "name": "Export price"
+      },
+      "energy_rate": {
+        "name": "Energy rate"
+      },
+      "standing_charge": {
+        "name": "Standing charge"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Cost structure",
+        "description": "Home Assistant prices energy as kWh x price, so only per-kWh costs can go in a price entity. Run tools/history.py against your statement history to fit these to your own account.",
+        "data": {
+          "wires_per_kwh": "Wires and fees per imported kWh",
+          "standing_per_day": "Standing charge per day",
+          "standing_per_month": "Standing charge per month",
+          "gst_rate": "GST rate"
+        }
       }
     }
   }

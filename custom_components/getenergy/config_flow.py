@@ -7,7 +7,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_PASSWORD, CONF_USERNAME
 from homeassistant.helpers.selector import (
     TextSelector,
@@ -15,8 +20,20 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
+from homeassistant.core import callback
+
 from .api import AuthError, GetEnergyClient
-from .const import DOMAIN
+from .const import (
+    CONF_GST_RATE,
+    CONF_STANDING_PER_DAY,
+    CONF_STANDING_PER_MONTH,
+    CONF_WIRES_PER_KWH,
+    DEFAULT_GST_RATE,
+    DEFAULT_STANDING_PER_DAY,
+    DEFAULT_STANDING_PER_MONTH,
+    DEFAULT_WIRES_PER_KWH,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +55,11 @@ class GetEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
     """Collect and verify portal credentials."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(entry: ConfigEntry) -> GetEnergyOptionsFlow:
+        return GetEnergyOptionsFlow()
 
     async def _validate(self, data: dict[str, Any]) -> None:
         """Log in once to confirm the credentials work."""
@@ -104,3 +126,45 @@ class GetEnergyConfigFlow(ConfigFlow, domain=DOMAIN):
             )}),
             errors=errors,
         )
+
+
+class GetEnergyOptionsFlow(OptionsFlow):
+    """Edit the cost structure used to derive prices.
+
+    The defaults were fitted from one Alberta account. Anyone on a different
+    tariff, municipality or distributor should run tools/history.py against
+    their own statements and set these.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        current = self.config_entry.options
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_WIRES_PER_KWH,
+                    default=current.get(CONF_WIRES_PER_KWH, DEFAULT_WIRES_PER_KWH),
+                ): vol.Coerce(float),
+                vol.Required(
+                    CONF_STANDING_PER_DAY,
+                    default=current.get(
+                        CONF_STANDING_PER_DAY, DEFAULT_STANDING_PER_DAY
+                    ),
+                ): vol.Coerce(float),
+                vol.Required(
+                    CONF_STANDING_PER_MONTH,
+                    default=current.get(
+                        CONF_STANDING_PER_MONTH, DEFAULT_STANDING_PER_MONTH
+                    ),
+                ): vol.Coerce(float),
+                vol.Required(
+                    CONF_GST_RATE,
+                    default=current.get(CONF_GST_RATE, DEFAULT_GST_RATE),
+                ): vol.Coerce(float),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

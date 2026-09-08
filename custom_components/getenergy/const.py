@@ -12,6 +12,26 @@ CONF_USERNAME: Final = "username"
 CONF_PASSWORD: Final = "password"
 CONF_KEEP_PDFS: Final = "keep_pdfs"
 
+# Cost-structure coefficients. Home Assistant prices energy as
+# sum(delta_kWh * price), so only the per-kWh part can live in a price entity;
+# the standing charges have to be reported separately.
+#
+# The defaults below were fitted from ~2 years of statements on one Alberta
+# microgeneration account (r2 > 0.98 on every wires component). They are a
+# starting point, not a universal truth: run tools/history.py against your own
+# history and set these in the integration options.
+CONF_WIRES_PER_KWH: Final = "wires_per_kwh"
+CONF_STANDING_PER_DAY: Final = "standing_per_day"
+CONF_STANDING_PER_MONTH: Final = "standing_per_month"
+CONF_GST_RATE: Final = "gst_rate"
+
+DEFAULT_WIRES_PER_KWH: Final = 0.10025
+DEFAULT_STANDING_PER_DAY: Final = 1.140
+DEFAULT_STANDING_PER_MONTH: Final = 10.22
+# GST is charged on the subtotal, which is already net of the microgen credit,
+# so the same rate applies to both the import price and the export credit.
+DEFAULT_GST_RATE: Final = 0.05
+
 # Bills are issued monthly and meter reads are monthly, so polling harder than
 # this only adds load to the portal for no new data.
 UPDATE_INTERVAL: Final = timedelta(hours=12)

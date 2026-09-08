@@ -65,10 +65,24 @@ POST /myretailer/portal/j_security_check
 j_username=<email>&j_password=<password>
 ```
 
-The form shows a `username` field but copies it into a hidden `j_username`
-before submit; only the `j_*` names go on the wire. On failure you get the
-login page back. **Repeated failures lock the account**, so this integration
-never retries credentials automatically — it raises a re-auth prompt instead.
+Only the `j_*` names go on the wire, and `j_username` is **not** the username
+you type. The login page's GWT module rewrites the hidden field to
+`<retailerName>_<username>` — `GET_you@example.com` on this portal — falling
+back to the bare username only when either part is empty:
+
+```js
+d = aY();  c = SR(a4);            // typed username, getProperty('retailerName')
+!H0(d) && !H0(c) ? eY(c + '_' + d) : eY(d);
+```
+
+Posting the bare username is rejected as a bad credential, indistinguishably
+from a wrong password. This integration reads the prefix out of the login
+page's `getProperty` shim rather than hardcoding it, so other UtilityNet
+retailers work too.
+
+On failure you get the login page back. Repeated failures may lock the account,
+so this integration never retries credentials automatically — it raises a
+re-auth prompt instead.
 
 **3. Mint a CSRF token.** `GET /myretailer/secure/login.html?tknr=true` with a
 `gwtservice: true` header (`tknr` = token renew). The token arrives as an

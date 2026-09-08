@@ -40,6 +40,24 @@ _LOGGER = logging.getLogger(__name__)
 
 ACCOUNT_ID = re.compile(r"^\d{10}$")
 
+# The login page carries a getProperty() shim naming the retailer, e.g.
+#   else if(id=='retailerName')return 'GET';
+RETAILER = re.compile(r"retailerName'\s*\)\s*return\s*'([^']*)'")
+
+
+def qualify(username: str, retailer: str | None) -> str:
+    """Return the value the portal expects in ``j_username``.
+
+    The login form shows a plain username box, but its GWT module rewrites the
+    hidden ``j_username`` field to ``<retailer>_<username>`` before submitting
+    (falling back to the bare username when either part is empty). Posting the
+    bare username is silently rejected as a bad credential, so this has to be
+    reproduced exactly.
+    """
+    if not retailer or not username:
+        return username
+    return f"{retailer}_{username}"
+
 
 class GetEnergyError(Exception):
     """Base error."""
@@ -104,9 +122,20 @@ class GetEnergyClient:
         if LOGIN_MARKER not in primer.text:
             return
 
+        match = RETAILER.search(primer.text)
+        retailer = match.group(1) if match else None
+        if retailer is None:
+            _LOGGER.warning(
+                "could not read the retailer prefix from the login page; "
+                "submitting the bare username, which the portal usually rejects"
+            )
+
         resp = self.session.post(
             LOGIN_POST,
-            data={"j_username": self.username, "j_password": self.password},
+            data={
+                "j_username": qualify(self.username, retailer),
+                "j_password": self.password,
+            },
             headers={"Referer": PROTECTED},
             timeout=30,
         )

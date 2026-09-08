@@ -97,3 +97,37 @@ def test_parses_a_real_pdf_end_to_end():
         "electricity_exported_kwh": 1000.0,
         "gas_consumption_gj": 5.50,
     }
+
+
+# -- j_username qualification ------------------------------------------------
+
+LOGIN_PAGE_SHIM = (
+    "<script>function getProperty(id) {if(id=='moduleId')return 'login.module';"
+    "else if(id=='retailerName')return 'GET';else return '';}</script>"
+)
+
+
+def test_retailer_prefix_is_read_from_the_login_page():
+    from getenergy.api import RETAILER
+
+    assert RETAILER.search(LOGIN_PAGE_SHIM).group(1) == "GET"
+
+
+def test_username_is_qualified_with_the_retailer_prefix():
+    """The portal rejects a bare username; its GWT module prefixes it."""
+    from getenergy.api import qualify
+
+    assert qualify("you@example.com", "GET") == "GET_you@example.com"
+
+
+@pytest.mark.parametrize("retailer", [None, ""])
+def test_username_is_left_alone_when_no_prefix_is_published(retailer):
+    from getenergy.api import qualify
+
+    assert qualify("you@example.com", retailer) == "you@example.com"
+
+
+def test_empty_username_is_never_prefixed():
+    from getenergy.api import qualify
+
+    assert qualify("", "GET") == ""

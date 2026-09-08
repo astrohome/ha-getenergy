@@ -34,24 +34,82 @@ def _field(key):
     return next(f for f in FIELDS if f.key == key)
 
 
+# Modelled on a real statement's layout -- dot leaders, credit signs, the
+# "Total Charges and GST" trap, and per-period charge lines. Figures are
+# synthetic but internally consistent: 200.00 + 10.00 = 210.00.
+BILL = """
+Current Due: $210.00
+Previous Charges and Payments
+Previous Balance $16.00
+Payments Received - Thank You
+Aug 12, 2026 - Electricity . . . . . . . . . . . . . . . . -$16.00
+Total Payments -$16.00
+Balance Forward $0.00
+Current Charges
+Charges . . . . . . . . . . . . . . . . . . . . . . . . . $200.00
+GST . . . . . . . . . . . . . . . . . . . . . . . . . . . . $10.00
+Charges and GST $210.00
+Total Charges $200.00
+Total GST $10.00
+Total Charges and GST $210.00
+Jul 23 2026 - Aug 21 2026 Usage: 560 kWh
+Charge Summary
+Subtotal $200.00
+Total Current Charges $210.00
+Total Due $210.00
+Energy Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.35 ) $81.20
+Energy Charge ( Aug 01 - Aug 21: 328.0 kWh @ $0.35 ) $114.80
+Green Offset Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.0185 ) $2.15
+Microgen Credit ( Jul 23 - Jul 31: 100.0 kWh @ -$0.35 ) -$35.00
+Microgen Credit ( Aug 01 - Aug 21: 184.0 kWh @ -$0.35 ) -$64.40
+"""
+
+
 @pytest.mark.parametrize(
-    ("text", "expected"),
+    ("key", "expected"),
     [
-        ("Total Amount Due $123.45", 123.45),
-        ("Amount Due: 1,234.56", 1234.56),
-        ("Total Amount Due ($45.00)", -45.00),
+        ("amount_due", 210.00),
+        ("previous_balance", 16.00),
+        ("payments", 16.00),
+        ("balance_forward", 0.00),
+        ("charges_before_tax", 200.00),
+        ("gst", 10.00),
+        ("electricity_imported_kwh", 560.0),
+        ("electricity_exported_kwh", 284.0),
     ],
 )
-def test_amount_due_handles_layout_variants(text, expected):
-    assert _field("amount_due").search(text) == expected
+def test_reads_each_figure_off_a_realistic_bill(key, expected):
+    assert _field(key).search(BILL) == expected
+
+
+def test_subtotal_is_not_confused_with_the_post_tax_total():
+    """The separator must not stride across words.
+
+    A permissive separator lets "Total Charges" match the value in "Total
+    Charges and GST $210.00", silently reporting the post-tax total as the
+    subtotal -- which is exactly what an earlier revision did.
+    """
+    assert _field("charges_before_tax").search(BILL) == 200.00
+    assert _field("charges_before_tax").search(BILL) != _field("amount_due").search(BILL)
+
+
+def test_extracted_figures_reconcile():
+    charges = _field("charges_before_tax").search(BILL)
+    gst = _field("gst").search(BILL)
+    assert round(charges + gst, 2) == _field("amount_due").search(BILL)
+
+
+def test_exported_kwh_sums_every_meter_period():
+    """Solar export is split per meter read, so a single match undercounts."""
+    assert _field("electricity_exported_kwh").search(BILL) == 100.0 + 184.0
+
+
+def test_absent_field_reports_none_rather_than_guessing():
+    assert _field("gas_consumption_gj").search(BILL) is None
 
 
 def test_credit_marked_with_cr_is_negative():
     assert _field("previous_balance").search("Previous Balance 88.10 CR") == -88.10
-
-
-def test_kwh_fields_are_numbers_not_currency():
-    assert _field("electricity_exported_kwh").search("Energy Exported 1000 kWh") == 1000
 
 
 def test_unmatched_labels_are_reported_missing_not_guessed(monkeypatch):
@@ -73,30 +131,13 @@ def test_parses_a_real_pdf_end_to_end():
     """Exercise pypdf extraction and label matching together, not mocked."""
     from pdf_fixture import make_pdf
 
-    pdf = make_pdf(
-        [
-            "GET ENERGY CONSOLIDATED STATEMENT",
-            "Previous Balance 100.00 CR",
-            "Payments Received $100.00",
-            "Current Charges $250.00",
-            "Total Amount Due $250.00",
-            "Energy Imported 400 kWh",
-            "Energy Exported 1000 kWh",
-            "Consumption 5.50 GJ",
-        ]
-    )
-    statement = parse(pdf, "202609")
+    statement = parse(make_pdf(BILL.strip().splitlines()), "202609")
 
-    assert statement.missing == []
-    assert statement.values == {
-        "amount_due": 250.00,
-        "previous_balance": -100.00,   # CR means credit
-        "payments": 100.00,
-        "current_charges": 250.00,
-        "electricity_imported_kwh": 400.0,
-        "electricity_exported_kwh": 1000.0,
-        "gas_consumption_gj": 5.50,
-    }
+    assert statement.missing == ["gas_consumption_gj"]
+    assert statement.values["amount_due"] == 210.00
+    assert statement.values["charges_before_tax"] == 200.00
+    assert statement.values["electricity_imported_kwh"] == 560.0
+    assert statement.values["electricity_exported_kwh"] == 284.0
 
 
 # -- j_username qualification ------------------------------------------------

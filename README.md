@@ -21,19 +21,24 @@ Or copy `custom_components/getenergy/` into your `config/custom_components/`.
 
 ## Sensors
 
-| Sensor | Unit | Source |
+| Sensor | Unit | Bill label |
 | --- | --- | --- |
-| Amount due | CAD | statement |
-| Previous balance | CAD | statement |
-| Payments received | CAD | statement |
-| Current charges | CAD | statement |
-| Electricity imported | kWh | statement |
-| Electricity exported | kWh | statement (solar) |
-| Gas consumption | GJ | statement |
+| Amount due | CAD | Current Due / Total Due |
+| Previous balance | CAD | Previous Balance |
+| Payments | CAD | Total Payments (as a positive amount paid) |
+| Balance forward | CAD | Balance Forward |
+| Charges before tax | CAD | Subtotal |
+| GST | CAD | Total GST |
+| Electricity imported | kWh | Usage |
+| Electricity exported | kWh | Microgen Credit lines, summed |
+| Gas consumption | GJ | Usage |
 
 Bills are monthly, so the coordinator polls twice a day and the values change
 once a month. A sensor whose label is absent from your statement reports
 **unavailable** rather than a guess — see [Calibration](#calibration).
+
+Gas appears only on statements that include a gas account; on an
+electricity-only month that sensor is correctly unavailable.
 
 ## How it works
 
@@ -139,9 +144,10 @@ reading the PDF.
 
 ## Calibration
 
-The bill labels in `bill.py` are matched with several candidate patterns each,
-but they have **not been validated against every statement layout**. If a
-sensor shows unavailable, see what your bill actually says:
+The labels in `bill.py` are validated against a real Alberta electricity
+statement, but **not against every layout** — gas-only, multi-account and
+other-retailer bills are unverified. If a sensor shows unavailable, see what
+your bill actually says:
 
 ```bash
 GETENERGY_USERNAME=you@example.com GETENERGY_PASSWORD=... \
@@ -159,8 +165,11 @@ python -m pytest tests/ -q
 ```
 
 The suite covers the GWT request encoding (asserted byte-identical to the real
-client's), the response string-table decoding, credit-sign handling, and a full
-PDF parse using a hand-built fixture PDF.
+client's), the `j_username` retailer prefixing, response string-table decoding,
+credit-sign handling, and a full PDF parse against a fixture modelled on a real
+statement — dot leaders, per-period charge lines, and the "Total Charges and
+GST" trap that makes a loose separator report the post-tax total as the
+subtotal.
 
 ## Credentials
 

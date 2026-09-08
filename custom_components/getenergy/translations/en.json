@@ -28,13 +28,33 @@
   },
   "entity": {
     "sensor": {
-      "amount_due": { "name": "Amount due" },
-      "previous_balance": { "name": "Previous balance" },
-      "payments": { "name": "Payments received" },
-      "current_charges": { "name": "Current charges" },
-      "electricity_imported": { "name": "Electricity imported" },
-      "electricity_exported": { "name": "Electricity exported" },
-      "gas_consumption": { "name": "Gas consumption" }
+      "amount_due": {
+        "name": "Amount due"
+      },
+      "previous_balance": {
+        "name": "Previous balance"
+      },
+      "payments": {
+        "name": "Payments received"
+      },
+      "electricity_imported": {
+        "name": "Electricity imported"
+      },
+      "electricity_exported": {
+        "name": "Electricity exported"
+      },
+      "gas_consumption": {
+        "name": "Gas consumption"
+      },
+      "balance_forward": {
+        "name": "Balance forward"
+      },
+      "charges_before_tax": {
+        "name": "Charges before tax"
+      },
+      "gst": {
+        "name": "GST"
+      }
     }
   }
 }

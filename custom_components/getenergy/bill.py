@@ -7,12 +7,14 @@ vendor redeploy, so a positional decoder would keep parsing happily while
 silently attaching the wrong number to the wrong sensor.
 
 The bill is the opposite: its labels are human-facing, so they change rarely
-and visibly. Every field here is therefore anchored on a printed label, and
-anything that does not match is reported as ``None`` -- an unavailable sensor
-is a correct answer, a wrong number is not.
+and visibly. Every field here is anchored on a printed label, and anything that
+does not match is reported as ``None`` -- an unavailable sensor is a correct
+answer, a wrong number is not.
 
-Labels are best-effort across statement layouts. Run ``tools/calibrate.py``
-against a real statement to see the extracted text and which patterns hit.
+The separator between a label and its value deliberately allows only
+whitespace, dot leaders and colons. A looser class lets a pattern stride across
+intervening words: "Total Charges" would happily match the value in "Total
+Charges and GST $210.00", reporting the post-tax total as the subtotal.
 """
 
 from __future__ import annotations
@@ -25,16 +27,15 @@ from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
-# A currency amount. Credits are printed either parenthesised or with a
-# trailing CR, so both markers are matched here rather than after the capture
-# -- otherwise they fall outside group(0) and the sign is lost.
+# Only whitespace, dot leaders and colons may sit between a label and its
+# value. See the module docstring for why this must not be widened.
+_SEP = r"[\s.:·]{0,80}"
+
+# A currency amount. Credits print either parenthesised, with a leading minus,
+# or with a trailing CR; the capture is always the magnitude.
 _MONEY = r"\(?-?\$?\s*([\d,]+\.\d{2})\)?(?:\s*CR\b)?"
-_NUMBER = r"(-?[\d,]+(?:\.\d+)?)"
 
-
-def _money(raw: str, negative: bool = False) -> float:
-    value = float(raw.replace(",", ""))
-    return -value if negative else value
+_NUM = r"([\d,]+(?:\.\d+)?)"
 
 
 @dataclass(frozen=True)
@@ -45,21 +46,31 @@ class Field:
     patterns: tuple[str, ...]
     unit: str
     kind: str = "money"
+    #: "first" takes the earliest match; "sum" adds every match of the first
+    #: pattern that hits, for figures the bill splits across meter periods.
+    aggregate: str = "first"
 
     def search(self, text: str) -> float | None:
         for pattern in self.patterns:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if not match:
+            matches = list(re.finditer(pattern, text, re.IGNORECASE))
+            if not matches:
                 continue
-            raw = match.group(1)
-            # A trailing CR, or parentheses, denotes a credit.
-            negative = bool(re.search(r"\)\s*$|CR\b", match.group(0), re.IGNORECASE))
-            try:
-                return _money(raw, negative) if self.kind == "money" else float(
-                    raw.replace(",", "")
-                )
-            except ValueError:
-                _LOGGER.debug("unparseable value for %s: %r", self.key, raw)
+
+            values: list[float] = []
+            for match in matches:
+                try:
+                    value = float(match.group(1).replace(",", ""))
+                except ValueError:
+                    _LOGGER.debug("unparseable value for %s", self.key)
+                    continue
+                # Parenthesised or CR-suffixed amounts are credits.
+                if re.search(r"\)\s*$|CR\b", match.group(0), re.IGNORECASE):
+                    value = -value
+                values.append(value)
+
+            if not values:
+                continue
+            return sum(values) if self.aggregate == "sum" else values[0]
         return None
 
 
@@ -67,51 +78,76 @@ FIELDS: tuple[Field, ...] = (
     Field(
         "amount_due",
         (
-            rf"total\s+amount\s+due[^\d\-\(]{{0,40}}{_MONEY}",
-            rf"amount\s+due[^\d\-\(]{{0,40}}{_MONEY}",
-            rf"please\s+pay[^\d\-\(]{{0,40}}{_MONEY}",
+            rf"current\s+due{_SEP}{_MONEY}",
+            rf"total\s+due{_SEP}{_MONEY}",
+            rf"total\s+current\s+charges{_SEP}{_MONEY}",
+            rf"total\s+amount\s+due{_SEP}{_MONEY}",
         ),
         "CAD",
     ),
     Field(
         "previous_balance",
-        (rf"previous\s+balance[^\d\-\(]{{0,40}}{_MONEY}",
-         rf"balance\s+forward[^\d\-\(]{{0,40}}{_MONEY}"),
+        (rf"previous\s+balance{_SEP}{_MONEY}",),
         "CAD",
     ),
     Field(
+        # Printed as a negative because it reduces the balance; exposed as the
+        # positive amount paid, which is how the label reads.
         "payments",
-        (rf"payment(?:s)?\s+received[^\d\-\(]{{0,40}}{_MONEY}",
-         rf"total\s+payments[^\d\-\(]{{0,40}}{_MONEY}"),
+        (
+            rf"total\s+payments{_SEP}{_MONEY}",
+            rf"payments\s+received{_SEP}{_MONEY}",
+            rf"payments{_SEP}{_MONEY}",
+        ),
         "CAD",
     ),
     Field(
-        "current_charges",
-        (rf"current\s+charges[^\d\-\(]{{0,40}}{_MONEY}",
-         rf"total\s+current\s+charges[^\d\-\(]{{0,40}}{_MONEY}"),
+        "balance_forward",
+        (rf"balance\s+forward{_SEP}{_MONEY}",),
         "CAD",
     ),
     Field(
+        # The subtotal before tax. Anchored on "Subtotal" first because
+        # "Total Charges" also begins "Total Charges and GST".
+        "charges_before_tax",
+        (rf"subtotal{_SEP}{_MONEY}", rf"total\s+charges{_SEP}{_MONEY}"),
+        "CAD",
+    ),
+    Field(
+        "gst",
+        (rf"total\s+gst{_SEP}{_MONEY}", rf"\bgst{_SEP}{_MONEY}"),
+        "CAD",
+    ),
+    Field(
+        # "Usage: 560 kWh" is the billed total. The per-period energy charge
+        # lines are summed as a fallback and agree with it.
         "electricity_imported_kwh",
-        (rf"imported[^\d\-]{{0,40}}{_NUMBER}\s*kWh",
-         rf"energy\s+imported[^\d\-]{{0,40}}{_NUMBER}",
-         rf"total\s+consumption[^\d\-]{{0,40}}{_NUMBER}\s*kWh"),
+        (
+            rf"usage{_SEP}{_NUM}\s*kWh",
+            rf"energy\s+charge\s*\([^)]*?:\s*{_NUM}\s*kWh",
+        ),
         "kWh",
         kind="number",
+        aggregate="sum",
     ),
     Field(
+        # Exported solar shows up only as the microgen credit lines, one per
+        # meter-read period, so they must be summed.
         "electricity_exported_kwh",
-        (rf"exported[^\d\-]{{0,40}}{_NUMBER}\s*kWh",
-         rf"energy\s+exported[^\d\-]{{0,40}}{_NUMBER}",
-         rf"micro[- ]?gen(?:eration)?[^\d\-]{{0,40}}{_NUMBER}\s*kWh"),
+        (
+            rf"microgen\s+credit\s*\([^)]*?:\s*{_NUM}\s*kWh",
+            rf"micro\s+generation[^$]*?total{_SEP}{_NUM}\b",
+        ),
         "kWh",
         kind="number",
+        aggregate="sum",
     ),
     Field(
         "gas_consumption_gj",
-        (rf"{_NUMBER}\s*GJ\b", rf"consumption[^\d\-]{{0,40}}{_NUMBER}\s*GJ"),
+        (rf"usage{_SEP}{_NUM}\s*GJ", rf"{_NUM}\s*GJ\b"),
         "GJ",
         kind="number",
+        aggregate="sum",
     ),
 )
 
@@ -133,10 +169,7 @@ class Statement:
 
 
 def extract_text(pdf: bytes) -> str:
-    """Return the text of every page, whitespace-normalised.
-
-    Raises ``ImportError`` with an actionable message if pypdf is missing.
-    """
+    """Return the text of every page, whitespace-normalised."""
     try:
         from pypdf import PdfReader
     except ImportError as exc:  # pragma: no cover - dependency is declared

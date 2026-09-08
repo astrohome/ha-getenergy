@@ -146,6 +146,32 @@ def fit(records: list[dict], key: str, predictor: str = IMPORTED) -> dict | None
     }
 
 
+def summarise(fits: dict[str, dict]) -> dict[str, float]:
+    """Roll the per-component fits up into the numbers a user acts on.
+
+    Rate-driven components are excluded from every total. Their coefficients
+    are meaningless -- the energy rate moved several-fold over the history, so
+    fitting it against kWh yields a negative slope and a large spurious
+    per-day term that would otherwise be banked as a standing charge.
+
+    ``standing_fixed`` sums every intercept, not only the rows that look
+    constant. The intercept is part of the fitted model regardless of how much
+    the row varies, and skipping the ones that vary silently drops real fixed
+    charges such as the admin fee.
+    """
+    by_key = {c.key: c for c in COMPONENTS}
+
+    def usable(key: str) -> bool:
+        comp = by_key[key]
+        return comp.marginal_import and not comp.rate_driven
+
+    return {
+        "variable": sum(f["per_kwh"] for k, f in fits.items() if usable(k)),
+        "standing_day": sum(f["per_day"] for k, f in fits.items() if usable(k)),
+        "standing_fixed": sum(f["fixed"] for k, f in fits.items() if usable(k)),
+    }
+
+
 def download(months: int, outdir: Path, delay: float) -> list[dict]:
     client = GetEnergyClient(
         username=os.environ["GETENERGY_USERNAME"],
@@ -231,16 +257,10 @@ def report(records: list[dict]) -> None:
     latest = next((r.get("rate_cents_per_kwh") for r in records
                    if r.get("rate_cents_per_kwh")), None)
 
-    # Energy and the microgen credit are rate x volume; the rate is printed on
-    # the bill, so it is read rather than inferred.
-    variable = sum(f["per_kwh"] for c, f in fits.items()
-                   if next(x for x in COMPONENTS if x.key == c).marginal_import
-                   and not next(x for x in COMPONENTS if x.key == c).rate_driven)
-    standing_day = sum(f["per_day"] for c, f in fits.items()
-                       if next(x for x in COMPONENTS if x.key == c).marginal_import)
-    standing_fixed = sum(f["fixed"] for c, f in fits.items()
-                         if next(x for x in COMPONENTS if x.key == c).marginal_import
-                         and f["nearly_constant"])
+    totals = summarise(fits)
+    variable = totals["variable"]
+    standing_day = totals["standing_day"]
+    standing_fixed = totals["standing_fixed"]
 
     print("\nPRICES FOR HOME ASSISTANT")
     print(f"  wires and fees, per imported kWh   ${variable:.5f}")

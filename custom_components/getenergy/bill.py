@@ -229,6 +229,44 @@ def _date(raw: str) -> str | None:
     return None
 
 
+# "Energy Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.35 ) $81.20"
+SEGMENT = re.compile(
+    r"(Energy Charge|Microgen Credit|Green Offset Charge)\s*\(\s*"
+    r"([A-Z][a-z]{2}\s+\d{1,2})\s*-\s*([A-Z][a-z]{2}\s+\d{1,2})\s*:\s*"
+    r"([\d,]+(?:\.\d+)?)\s*kWh\s*@\s*(-?)\$\s*([\d.]+)\s*\)"
+    r"[\s.:]*(-?)\$?\s*([\d,]+\.\d{2})",
+    re.IGNORECASE,
+)
+
+
+def extract_segments(text: str) -> list[dict[str, Any]]:
+    """Break the bill into its per-rate charge segments.
+
+    A single statement can span a rate change -- this account is on a seasonal
+    Solar Club rate that auto-switches, so one month can bill part of its kWh
+    at 33 cents and the rest at 6.89. The "Current Rate" line reports only one
+    of them, so a single rate per statement is not enough to price a month
+    correctly, and these lines are the authoritative per-segment breakdown.
+
+    Returns one record per line with its own kWh, rate and amount, signs
+    preserved so credits stay negative.
+    """
+    segments = []
+    for match in SEGMENT.finditer(text):
+        kind, start, end, kwh, rate_sign, rate, amt_sign, amount = match.groups()
+        segments.append(
+            {
+                "kind": re.sub(r"\s+", " ", kind).lower(),
+                "from": re.sub(r"\s+", " ", start),
+                "to": re.sub(r"\s+", " ", end),
+                "kwh": float(kwh.replace(",", "")),
+                "rate": (-1 if rate_sign else 1) * float(rate),
+                "amount": (-1 if amt_sign else 1) * float(amount.replace(",", "")),
+            }
+        )
+    return segments
+
+
 def extract_meta(text: str) -> dict[str, Any]:
     """Pull the service period, key dates and the energy rate.
 
@@ -265,13 +303,24 @@ class Statement:
     values: dict[str, float] = field(default_factory=dict)
     missing: list[str] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    #: Per-rate charge lines. A month spanning a rate switch has several.
+    segments: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def statement_date(self) -> date:
         return datetime.strptime(self.period + "01", "%Y%m%d").date()
 
     def as_dict(self) -> dict[str, Any]:
-        return {"period": self.period, **self.meta, **self.values}
+        out: dict[str, Any] = {"period": self.period, **self.meta, **self.values}
+        if self.segments:
+            out["segments"] = self.segments
+        return out
+
+    @property
+    def energy_rates(self) -> list[float]:
+        """Distinct energy rates billed in this period, in dollars per kWh."""
+        return sorted({s["rate"] for s in self.segments
+                       if s["kind"] == "energy charge"})
 
 
 def extract_text(pdf: bytes) -> str:
@@ -298,7 +347,9 @@ def parse(pdf: bytes, period: str) -> Statement:
     guessed at, so a layout change surfaces as unavailable sensors.
     """
     text = extract_text(pdf)
-    statement = Statement(period=period, meta=extract_meta(text))
+    statement = Statement(
+        period=period, meta=extract_meta(text), segments=extract_segments(text)
+    )
 
     for spec in FIELDS:
         value = spec.search(text)
@@ -314,9 +365,16 @@ def parse(pdf: bytes, period: str) -> Statement:
             ", ".join(statement.missing),
         )
     if not statement.values:
-        _LOGGER.warning(
-            "statement %s: no known labels matched at all. The bill layout has "
-            "probably changed - run tools/calibrate.py to inspect it.",
-            period,
-        )
+        if len(text.strip()) < 200:
+            # Periods before the account existed come back as a near-empty
+            # stub PDF rather than a 404. That is an absent statement, not a
+            # layout change, and warning about it trains people to ignore the
+            # warning that does matter.
+            _LOGGER.debug("statement %s: document carries no text", period)
+        else:
+            _LOGGER.warning(
+                "statement %s: no known labels matched at all. The bill layout "
+                "has probably changed - run tools/calibrate.py to inspect it.",
+                period,
+            )
     return statement

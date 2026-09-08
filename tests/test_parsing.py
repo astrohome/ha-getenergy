@@ -238,3 +238,50 @@ def test_empty_username_is_never_prefixed():
     from getenergy.api import qualify
 
     assert qualify("", "GET") == ""
+
+
+# -- per-rate segments -------------------------------------------------------
+
+RATE_SWITCH = """
+Energy Charge ( Sep 01 - Sep 29: 433.0 kWh @ $0.33 ) $142.89
+Energy Charge ( Sep 30 - Sep 30: 16.0 kWh @ $0.0689 ) $1.10
+Microgen Credit ( Sep 01 - Sep 29: 804.0 kWh @ -$0.33 ) -$265.32
+"""
+
+
+def test_a_month_spanning_a_rate_switch_yields_one_segment_per_rate():
+    """The Solar Club rate auto-switches seasonally.
+
+    A statement can therefore bill part of its kWh at one rate and the rest at
+    another, while the "Current Rate" line reports only one of them.
+    """
+    from getenergy.bill import extract_segments
+
+    segments = extract_segments(RATE_SWITCH)
+    energy = [s for s in segments if s["kind"] == "energy charge"]
+
+    assert len(energy) == 2
+    assert sorted(s["rate"] for s in energy) == [0.0689, 0.33]
+    assert sum(s["kwh"] for s in energy) == 449.0
+
+
+def test_segment_amounts_reconcile_with_rate_times_volume():
+    from getenergy.bill import extract_segments
+
+    for segment in extract_segments(RATE_SWITCH):
+        assert abs(segment["kwh"] * segment["rate"] - segment["amount"]) < 0.02
+
+
+def test_segment_credits_keep_their_sign():
+    from getenergy.bill import extract_segments
+
+    credit = [s for s in extract_segments(RATE_SWITCH) if "microgen" in s["kind"]][0]
+    assert credit["rate"] < 0
+    assert credit["amount"] < 0
+
+
+def test_energy_rates_are_surfaced_on_the_statement():
+    from getenergy.bill import Statement, extract_segments
+
+    statement = Statement(period="202509", segments=extract_segments(RATE_SWITCH))
+    assert statement.energy_rates == [0.0689, 0.33]

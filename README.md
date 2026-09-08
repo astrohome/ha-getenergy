@@ -157,6 +157,36 @@ GETENERGY_USERNAME=you@example.com GETENERGY_PASSWORD=... \
 It prints the extracted text and which fields matched. Widen the patterns in
 `custom_components/getenergy/bill.py` and please open a PR so others benefit.
 
+## Cost structure and backfill (in progress)
+
+HA's energy dashboard computes `cost = Σ(Δ kWh × price)` — a pure
+multiplication with **no way to express a standing charge**. An Alberta
+electricity bill is not linear in kWh: the admin charge and part of the
+distribution charge are fixed monthly, which is why average cost per kWh falls
+the more you import.
+
+So no single price entity can be both bill-accurate and decision-accurate.
+Average pricing reconciles to the bill but spikes absurdly early in the month
+and gives a useless marginal signal; marginal pricing is right for decisions
+but undershoots the bill by the fixed charges.
+
+The bill prints Transmission and Distribution as single totals and never
+publishes the split. `tools/history.py` recovers it empirically:
+
+```bash
+GETENERGY_USERNAME=you@example.com GETENERGY_PASSWORD=...     python tools/history.py
+```
+
+It downloads your statement history (cached, rate-limited), then regresses each
+component as `charge ≈ fixed + per_kwh·kWh + per_day·days`. The `per_kwh`
+slopes are what a marginal price entity should use; `fixed` and `per_day` have
+to be tracked separately.
+
+Check the `r2` column before trusting any row — a low value means kWh and days
+do not explain that component, and its split should not be rounded into a rate.
+The fit refuses outright when kWh never varies, rather than inventing a
+plausible-looking split.
+
 ## Development
 
 ```bash

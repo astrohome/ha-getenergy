@@ -52,14 +52,13 @@ Charges and GST $210.00
 Total Charges $200.00
 Total GST $10.00
 Total Charges and GST $210.00
-Jul 23 2026 - Aug 21 2026 Usage: 560 kWh
+Jul 01 2026 - Jul 30 2026 Usage: 400 kWh
 Charge Summary
 Subtotal $200.00
 Total Current Charges $210.00
 Total Due $210.00
 Energy Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.35 ) $81.20
 Energy Charge ( Aug 01 - Aug 21: 328.0 kWh @ $0.35 ) $114.80
-Green Offset Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.0185 ) $2.15
 Microgen Credit ( Jul 23 - Jul 31: 100.0 kWh @ -$0.35 ) -$35.00
 Microgen Credit ( Aug 01 - Aug 21: 184.0 kWh @ -$0.35 ) -$64.40
 """
@@ -74,7 +73,7 @@ Microgen Credit ( Aug 01 - Aug 21: 184.0 kWh @ -$0.35 ) -$64.40
         ("balance_forward", 0.00),
         ("charges_before_tax", 200.00),
         ("gst", 10.00),
-        ("electricity_imported_kwh", 560.0),
+        ("electricity_imported_kwh", 400.0),
         ("electricity_exported_kwh", 284.0),
     ],
 )
@@ -127,17 +126,84 @@ def test_statement_date_derives_from_period():
     assert Statement(period="202609").statement_date.isoformat() == "2026-09-01"
 
 
+COMPONENTS = """
+Current Rate: Fixed 35.000 cents / kWh effective for meter reads from Apr 23 2026
+Statement Date: Sep 02, 2026
+Due Date: Sep 10, 2026
+Energy $200.00
+Green Offset Charge ( Jul 23 - Jul 31: 232.0 kWh @ $0.0185 ) $2.00
+Green Offset Charge ( Aug 01 - Aug 21: 328.0 kWh @ $0.0185 ) $3.00
+Microgen -$99.00
+Regulated Transmission and Distribution $73.00
+Transmission Charge $24.00
+Transmission Riders -$1.00
+Distribution Charge $49.00
+Distribution Riders $1.00
+Balancing Pool Charge $0.60
+Municipal Fee to Example City $14.00
+Admin Charge $9.00
+"""
+
+
 def test_parses_a_real_pdf_end_to_end():
     """Exercise pypdf extraction and label matching together, not mocked."""
     from pdf_fixture import make_pdf
 
-    statement = parse(make_pdf(BILL.strip().splitlines()), "202609")
+    lines = (BILL + COMPONENTS).strip().splitlines()
+    statement = parse(make_pdf(lines), "202609")
 
     assert statement.missing == ["gas_consumption_gj"]
     assert statement.values["amount_due"] == 210.00
     assert statement.values["charges_before_tax"] == 200.00
-    assert statement.values["electricity_imported_kwh"] == 560.0
+    assert statement.values["electricity_imported_kwh"] == 400.0
     assert statement.values["electricity_exported_kwh"] == 284.0
+
+
+def test_extracts_the_service_period_and_rate():
+    """Backfilling statistics needs the window the kWh actually cover."""
+    from getenergy.bill import extract_meta
+
+    meta = extract_meta(BILL + COMPONENTS)
+
+    assert meta["service_from"] == "2026-07-01"
+    assert meta["service_to"] == "2026-07-30"
+    assert meta["service_days"] == 30
+    assert meta["rate_cents_per_kwh"] == 35.0
+    assert meta["rate_type"] == "fixed"
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [
+        ("energy_charge", 200.00),
+        ("green_offset_charge", 5.00),      # summed across meter periods
+        ("microgen_credit", -99.00),        # a credit stays negative
+        ("transmission_and_distribution", 73.00),
+        ("transmission_charge", 24.00),
+        ("transmission_riders", -1.00),     # riders can go either way
+        ("distribution_charge", 49.00),
+        ("distribution_riders", 1.00),
+        ("balancing_pool", 0.60),
+        ("franchise_fee", 14.00),           # via the "Municipal Fee to <city>" label
+        ("admin_charge", 9.00),
+    ],
+)
+def test_reads_each_itemised_charge_component(key, expected):
+    assert _field(key).search(BILL + COMPONENTS) == expected
+
+
+def test_energy_label_does_not_swallow_the_per_period_charge_lines():
+    """"Energy $200.00" is the total; "Energy Charge ( ... )" are its parts."""
+    assert _field("energy_charge").search(BILL + COMPONENTS) == 200.00
+
+
+def test_credit_word_does_not_flip_a_sign():
+    """A loose /cr/i matches the "Cr" in "Credit" and negates wrongly."""
+    from getenergy.bill import _is_credit
+
+    assert _is_credit("Microgen Credit ( Jul 23: 100.0 kWh @ $0.35 ) $35.00") is False
+    assert _is_credit("Transmission Riders -$1.26") is True
+    assert _is_credit("Previous Balance 88.10 CR") is True
 
 
 # -- j_username qualification ------------------------------------------------

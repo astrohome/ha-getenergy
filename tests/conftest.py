@@ -15,9 +15,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PACKAGE = HERE.parent / "custom_components" / "getenergy"
 
-# The PDF fixture helper lives beside the tests.
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+# The PDF fixture helper lives beside the tests; the analysis tool it also
+# exercises lives in tools/.
+for extra in (HERE, HERE.parent / "tools"):
+    if str(extra) not in sys.path:
+        sys.path.insert(0, str(extra))
 
 if "getenergy" not in sys.modules:
     stub = types.ModuleType("getenergy")

@@ -140,10 +140,30 @@ def build(
     return series
 
 
+def _mean_type_none() -> Any | None:
+    """StatisticMeanType.NONE, or None on cores that predate it.
+
+    Imported lazily so this module stays usable -- and testable -- without
+    Home Assistant installed.
+    """
+    try:
+        from homeassistant.components.recorder.models import StatisticMeanType
+    except ImportError:
+        return None
+    return StatisticMeanType.NONE
+
+
 def metadata(key: str) -> dict[str, Any]:
-    """Recorder metadata for one series."""
+    """Recorder metadata for one series.
+
+    These are pure sum series: a running total of kWh or dollars, with no
+    meaningful average. ``has_mean`` was superseded by ``mean_type`` and stops
+    working in Home Assistant 2026.11, so both are sent -- the old key keeps
+    older cores working, and extra keys are harmless since StatisticMetaData
+    is a TypedDict and not validated at runtime.
+    """
     name, unit = ALL_SERIES[key]
-    return {
+    meta: dict[str, Any] = {
         "has_mean": False,
         "has_sum": True,
         "name": f"Get Energy {name}",
@@ -151,3 +171,8 @@ def metadata(key: str) -> dict[str, Any]:
         "statistic_id": statistic_id(key),
         "unit_of_measurement": unit,
     }
+
+    mean_type = _mean_type_none()
+    if mean_type is not None:
+        meta["mean_type"] = mean_type
+    return meta

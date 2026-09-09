@@ -142,3 +142,29 @@ def test_metadata_declares_a_sum_series():
     assert meta["has_mean"] is False
     assert meta["source"] == "getenergy"
     assert meta["unit_of_measurement"] == "kWh"
+
+
+def test_metadata_declares_mean_type_when_the_core_supports_it():
+    """has_mean is deprecated and stops working in Home Assistant 2026.11.
+
+    Without Home Assistant installed the enum cannot be imported, so the key
+    is omitted rather than faked -- but has_sum must always be declared, since
+    these are pure running totals.
+    """
+    from getenergy.statistics import _mean_type_none
+
+    meta = metadata("electricity_imported")
+
+    assert meta["has_sum"] is True
+    assert meta["has_mean"] is False
+    if _mean_type_none() is not None:
+        assert "mean_type" in meta
+    else:
+        assert "mean_type" not in meta
+
+
+def test_mean_type_helper_tolerates_a_missing_core():
+    """Must degrade quietly, not raise, when recorder is unavailable."""
+    from getenergy.statistics import _mean_type_none
+
+    _mean_type_none()  # no exception

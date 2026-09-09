@@ -16,5 +16,5 @@
     "requests>=2.31",
     "pypdf>=4.2"
   ],
-  "version": "0.1.0"
+  "version": "0.1.1"
 }

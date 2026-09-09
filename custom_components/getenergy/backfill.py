@@ -17,10 +17,8 @@ from datetime import date
 
 import voluptuous as vol
 
-from homeassistant.components.recorder.statistics import async_add_external_statistics
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .api import AuthError, DocumentUnavailable, GetEnergyClient
@@ -104,6 +102,13 @@ def async_register(hass: HomeAssistant) -> None:
 
         if not statements:
             raise HomeAssistantError("no statements found to import")
+
+        # Imported here rather than at module scope: the recorder statistics
+        # helper is an internal API, and a future rename should break only the
+        # backfill action, not the whole integration.
+        from homeassistant.components.recorder.statistics import (
+            async_add_external_statistics,
+        )
 
         from .sensor import coefficients  # local import avoids a cycle
 

@@ -21,7 +21,12 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 
-from .api import AuthError, DocumentUnavailable, GetEnergyClient
+from .api import (
+    AuthError,
+    DocumentUnavailable,
+    GetEnergyClient,
+    StatementNotFound,
+)
 from .bill import Statement, parse
 from .const import BACKFILL_MONTHS, DOMAIN
 from .pricing import Coefficients
@@ -61,7 +66,12 @@ def collect(client: GetEnergyClient, months: int) -> list[Statement]:
         period = f"{year:04d}{month:02d}"
         try:
             pdf = client.consolidated(period)
+        except StatementNotFound:
+            pdf = None
         except DocumentUnavailable:
+            # Transient, not absent. Skip this month and carry on; re-running
+            # picks it up, since statistics are keyed by timestamp.
+            _LOGGER.warning("document service unavailable for %s; skipped", period)
             pdf = None
 
         if pdf is not None:

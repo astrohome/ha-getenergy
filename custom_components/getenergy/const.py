@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import Final
 
 DOMAIN: Final = "getenergy"
@@ -32,9 +31,12 @@ DEFAULT_STANDING_PER_MONTH: Final = 10.22
 # so the same rate applies to both the import price and the export credit.
 DEFAULT_GST_RATE: Final = 0.05
 
-# Bills are issued monthly and meter reads are monthly, so polling harder than
-# this only adds load to the portal for no new data.
-UPDATE_INTERVAL: Final = timedelta(hours=12)
+# How far back a routine refresh will look for the newest statement. Small on
+# purpose: the backfill service is the tool for reaching further back, and a
+# routine refresh should not be able to download a year of PDFs. Scheduling
+# itself lives in schedule.py, which predicts the next check from the last
+# statement's date instead of polling on a fixed interval.
+ROUTINE_LOOKBACK_MONTHS: Final = 2
 
 # How many months back to look for a statement on first run.
 BACKFILL_MONTHS: Final = 24

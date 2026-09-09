@@ -40,7 +40,11 @@ if "getenergy" not in sys.modules:
     _stub.__path__ = [str(_PACKAGE)]
     sys.modules["getenergy"] = _stub
 
-from getenergy.api import DocumentUnavailable, GetEnergyClient  # noqa: E402
+from getenergy.api import (  # noqa: E402
+    DocumentUnavailable,
+    GetEnergyClient,
+    StatementNotFound,
+)
 from getenergy.bill import parse  # noqa: E402
 
 IMPORTED = "electricity_imported_kwh"
@@ -200,8 +204,12 @@ def download(months: int, outdir: Path, delay: float) -> list[dict]:
         else:
             try:
                 pdf = client.consolidated(period)
-            except DocumentUnavailable:
+            except StatementNotFound:
                 print(f"  {period}  {'-':>8}")
+                step()
+                continue
+            except DocumentUnavailable:
+                print(f"  {period}  {'503':>8}  transient; re-run to pick it up")
                 step()
                 continue
             pdf_path.write_bytes(pdf)

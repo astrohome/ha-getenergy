@@ -45,9 +45,24 @@ Integration** → **Get Energy**, and enter your portal credentials.
 | Energy rate | CAD/kWh | Current Rate |
 | Standing charge | CAD | derived — what price entities cannot express |
 
-Bills are monthly, so the coordinator polls twice a day and the values change
-once a month. A sensor whose label is absent from your statement reports
-**unavailable** rather than a guess — see [Calibration](#calibration).
+A sensor whose label is absent from your statement reports **unavailable**
+rather than a guess — see [Calibration](#calibration).
+
+### Polling
+
+Bills arrive once a month, so this does not poll on a fixed interval. After
+each statement it predicts when the next one is plausible — from the
+statement's own date, not a calendar month — stays quiet until then, and only
+checks daily once a new bill is actually due.
+
+On a real account that works out at roughly **8 wake-ups a month**, against
+about 60 for twice-daily polling. Observed cycles were 28–33 days, so checking
+starts 26 days after the last statement rather than at the average, which
+avoids missing a short cycle without polling early every month.
+
+A routine refresh looks back at most two months. Reaching further back is what
+the backfill action is for; a scheduled refresh should never be able to
+download a year of PDFs.
 
 Gas appears only on statements that include a gas account; on an
 electricity-only month that sensor is correctly unavailable.

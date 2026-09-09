@@ -68,7 +68,16 @@ class AuthError(GetEnergyError):
 
 
 class DocumentUnavailable(GetEnergyError):
-    """The document service answered 503, or no bill exists for the period."""
+    """The document service is temporarily unwell (503).
+
+    Distinct from StatementNotFound on purpose. Conflating the two makes a
+    single transient 503 look like "this month has no bill", which sends the
+    caller walking backwards through months of PDFs it does not need.
+    """
+
+
+class StatementNotFound(GetEnergyError):
+    """No statement exists for that period (404). Not an error condition."""
 
 
 def encode_rpc(method: str) -> str:
@@ -216,7 +225,7 @@ class GetEnergyClient:
         if resp.status_code == 503:
             raise DocumentUnavailable("document service unavailable (503)")
         if resp.status_code == 404:
-            raise DocumentUnavailable("no statement for that period")
+            raise StatementNotFound("no statement for that period")
         if resp.status_code == 403:
             self._csrf = None
             raise AuthError("CSRF token rejected while downloading")
@@ -242,8 +251,13 @@ class GetEnergyClient:
     def latest_consolidated(self, months: int) -> tuple[str, bytes]:
         """Walk back month by month until a statement exists.
 
-        Returns ``(period, pdf_bytes)``. Raises :class:`DocumentUnavailable`
-        if nothing is found in the window.
+        Only a 404 justifies stepping back a month. A 503 is propagated
+        immediately: the document service being briefly unwell says nothing
+        about whether that month has a bill, and treating it as absent would
+        download every month in the window for no reason.
+
+        Returns ``(period, pdf_bytes)``. Raises :class:`StatementNotFound` if
+        the window holds no statement.
         """
         today = date.today()
         year, month = today.year, today.month
@@ -251,8 +265,8 @@ class GetEnergyClient:
             period = f"{year:04d}{month:02d}"
             try:
                 return period, self.consolidated(period)
-            except DocumentUnavailable:
+            except StatementNotFound:
                 month -= 1
                 if month == 0:
                     year, month = year - 1, 12
-        raise DocumentUnavailable(f"no statement found in the last {months} months")
+        raise StatementNotFound(f"no statement found in the last {months} months")

@@ -13,11 +13,19 @@ Works for electricity, natural gas, and solar micro-generation accounts.
 
 ## Install
 
-**HACS → ⋮ → Custom repositories →** add `astrohome/ha-getenergy` as an
-**Integration**, install, restart Home Assistant, then
-**Settings → Devices & Services → Add Integration → Get Energy**.
+**1.** HACS → ⋮ → Custom repositories → add `astrohome/ha-getenergy` as an
+**Integration**, then install it. (Or copy `custom_components/getenergy/` into
+your `config/custom_components/`.)
 
-Or copy `custom_components/getenergy/` into your `config/custom_components/`.
+**2.** Restart Home Assistant.
+
+**3. Add the integration:** Settings → Devices & Services → **+ Add
+Integration** → **Get Energy**, and enter your portal credentials.
+
+> Step 3 is not optional. Installing only copies files to disk; it does not
+> create a config entry. Without one, Home Assistant never loads the component,
+> so no entities appear and `getenergy.backfill` does not exist — it reports
+> **"Action getenergy.backfill not found"**.
 
 ## Sensors
 

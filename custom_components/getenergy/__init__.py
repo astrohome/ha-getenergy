@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
+from .backfill import async_register
 from .coordinator import GetEnergyCoordinator
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
@@ -22,6 +23,9 @@ async def async_setup_entry(
 
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # A backfill re-downloads every past bill, so it is on demand only.
+    async_register(hass)
     return True
 
 

@@ -174,7 +174,52 @@ distribution charge, so it is credited at the plain energy rate.
 **These prices are marginal, and deliberately do not reconcile to your bill.**
 See below.
 
-## Cost structure and backfill (in progress)
+## Backfilling history
+
+Past bills can be imported into long-term statistics so historical months
+appear on the energy dashboard alongside live data.
+
+**Developer tools → Actions → Get Energy: Backfill statistics**, optionally
+setting `months` (default 24). Or:
+
+```yaml
+action: getenergy.backfill
+data:
+  months: 24
+```
+
+It creates four external statistics:
+
+| Statistic | Unit |
+| --- | --- |
+| `getenergy:electricity_imported` | kWh |
+| `getenergy:electricity_exported` | kWh |
+| `getenergy:import_cost` | CAD |
+| `getenergy:export_credit` | CAD |
+
+Re-running is safe: statistics are keyed by id and timestamp, so a period
+imported twice is overwritten, not doubled. It downloads one PDF per month, so
+run it sparingly rather than on a schedule.
+
+### The approximation, stated plainly
+
+**Each period's kWh is spread evenly across the days it covers.** The bill only
+gives a total for the whole meter-read window, so the intra-period shape is
+uniform and *not real*. Do not read the daily view as actual daily usage.
+
+Spreading is not cosmetic. Service periods straddle calendar months — Jul 23 to
+Aug 21, for instance — so stamping a period's whole total on one day would
+attribute it entirely to the wrong month and make monthly totals wrong.
+Distributing over the actual days puts each kWh in the month it belongs to.
+
+Cost series use **each statement's own rate**, not today's. A backfill spans
+seasonal rate switches, and pricing two-year-old kWh at the current rate would
+be badly wrong.
+
+Statements with no readable service window are skipped rather than guessed at:
+placing energy on invented dates is worse than omitting it.
+
+## Cost structure
 
 HA's energy dashboard computes `cost = Σ(Δ kWh × price)` — a pure
 multiplication with **no way to express a standing charge**. An Alberta

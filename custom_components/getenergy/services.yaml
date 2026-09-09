@@ -1,0 +1,18 @@
+backfill:
+  name: Backfill statistics
+  description: >-
+    Import past statements into long-term statistics so historical months
+    appear on the energy dashboard. Downloads one PDF per month, so run it
+    sparingly. Re-running is safe - statistics are keyed by timestamp and are
+    overwritten rather than duplicated.
+  fields:
+    months:
+      name: Months
+      description: How far back to look for statements.
+      required: false
+      default: 24
+      selector:
+        number:
+          min: 1
+          max: 120
+          mode: box

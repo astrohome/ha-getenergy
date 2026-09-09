@@ -82,5 +82,17 @@
         }
       }
     }
+  },
+  "services": {
+    "backfill": {
+      "name": "Backfill statistics",
+      "description": "Import past statements into long-term statistics so historical months appear on the energy dashboard.",
+      "fields": {
+        "months": {
+          "name": "Months",
+          "description": "How far back to look for statements."
+        }
+      }
+    }
   }
 }

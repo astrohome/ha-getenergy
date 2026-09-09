@@ -5,6 +5,9 @@
     "@astrohome"
   ],
   "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/astrohome/ha-getenergy",
   "integration_type": "service",
   "iot_class": "cloud_polling",
@@ -13,8 +16,5 @@
     "requests>=2.31",
     "pypdf>=4.2"
   ],
-  "version": "0.1.0",
-  "dependencies": [
-    "recorder"
-  ]
+  "version": "0.1.0"
 }

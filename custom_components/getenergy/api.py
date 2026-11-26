@@ -67,6 +67,16 @@ class AuthError(GetEnergyError):
     """Credentials rejected, or the session was invalidated."""
 
 
+class StaleClientBuild(GetEnergyError):
+    """The portal refused a GWT-RPC call outright (403).
+
+    Not an auth failure: the RPC only runs after a login that succeeded, and
+    the usual cause is the vendor redeploying, which changes the POLICY and
+    PERMUTATION hashes in const.py. Treating it as bad credentials would send
+    the user round a re-auth loop that a correct password cannot break.
+    """
+
+
 class DocumentUnavailable(GetEnergyError):
     """The document service is temporarily unwell (503).
 
@@ -195,11 +205,15 @@ class GetEnergyClient:
             timeout=60,
         )
 
-        # A rejected token 403s and then invalidates the session outright, so
-        # treat it as an auth failure rather than retrying in place.
+        # A 403 invalidates the session outright, so never retry in place. With
+        # a freshly minted token it almost always means the build hashes in
+        # const.py are stale, which no amount of re-authenticating fixes.
         if resp.status_code == 403:
             self._csrf = None
-            raise AuthError("CSRF token rejected; session invalidated")
+            raise StaleClientBuild(
+                "portal refused the RPC (403); it has probably been redeployed - "
+                "refresh POLICY and PERMUTATION in const.py from portal.nocache.js"
+            )
         if LOGIN_MARKER in resp.text:
             raise AuthError("session expired during RPC")
 

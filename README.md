@@ -169,6 +169,11 @@ compiled app. If account discovery starts failing, refresh them from
 `portal.nocache.js`. Statement parsing is unaffected — that's the point of
 reading the PDF.
 
+Routine refreshes make no RPC call at all, so a redeploy cannot break them. The
+RPC client reports a refused call as `StaleClientBuild` rather than an auth
+failure: it only runs after a successful login, and treating it as bad
+credentials sends the user round a re-auth loop no password can break.
+
 ## Calibration
 
 The labels in `bill.py` are validated against a real Alberta electricity

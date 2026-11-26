@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -30,7 +30,6 @@ class GetEnergyData:
     """What one refresh produced."""
 
     statement: Statement | None = None
-    account_ids: list[str] = field(default_factory=list)
 
     @property
     def values(self) -> dict[str, Any]:
@@ -60,18 +59,20 @@ class GetEnergyCoordinator(DataUpdateCoordinator[GetEnergyData]):
         self.client = GetEnergyClient(
             username=entry.data["username"], password=entry.data["password"]
         )
-        self._accounts: list[str] = []
 
     def _refresh(self) -> GetEnergyData:
-        """Blocking work, run in an executor."""
+        """Blocking work, run in an executor.
+
+        Deliberately makes no GWT-RPC call. Account discovery used to run here
+        although nothing read its result, and it is the one request that pins
+        the vendor's build hashes: after a portal redeploy it 403'd, which
+        invalidated the session and was reported as an auth failure, so every
+        successful re-auth was followed by another re-auth prompt. The
+        consolidated statement needs only the session and its CSRF token.
+        """
         self.client.login()
-
-        # One RPC round trip, not one per refresh: account ids do not change.
-        if not self._accounts:
-            self._accounts = self.client.account_ids()
-
         period, pdf = self.client.latest_consolidated(ROUTINE_LOOKBACK_MONTHS)
-        return GetEnergyData(statement=parse(pdf, period), account_ids=self._accounts)
+        return GetEnergyData(statement=parse(pdf, period))
 
     def _reschedule(self, statement: Statement | None) -> None:
         """Set the next interval from the statement's own date."""
